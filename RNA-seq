@@ -1,0 +1,269 @@
+# % Last Change: Jan 20 
+###########
+### DEG ###
+###########
+library(DESeq2)
+library(ggplot2)
+library(RColorBrewer)
+
+# User input for file selection
+count_matrix_file <- readline(prompt = "Enter the path to the count matrix file: ")
+design_table_file <- readline(prompt = "Enter the path to the design table file: ")
+
+# Load count data
+ct <- length(read.table(count_matrix_file, sep="\t", nrows=1))
+cts <- read.table(count_matrix_file, header=TRUE, sep="\t", check.names=FALSE, colClasses=c("character", rep("numeric", ct-1)))
+
+geneName <- cts[,1]
+geneLength <- cts[,2]
+cts <- cts[,-(1:2)]
+rownames(cts) <- geneName
+
+# Load design table
+ct <- length(read.table(design_table_file, sep="\t", nrows=1))
+coldata <- read.table(design_table_file, header=TRUE, sep="\t", colClasses=c("character", rep("factor", ct-1)))
+rownames(coldata) <- coldata[,1]
+rownames(coldata)=coldata[,1]
+coldata=coldata[,-1,drop=F]
+# check if count and colData are in the same order with respect to samples
+all(rownames(coldata) %in% colnames(cts)) # TRUE
+all(rownames(coldata) == colnames(cts)) #TRUE
+x <- factor(coldata$treatment)
+design <- model.matrix(~0+x)
+colnames(design) <- levels(x)
+dds <- DESeqDataSetFromMatrix(countData=cts,colData=coldata,design=design)
+keep <- rowSums(counts(dds)) >= 50 # filter out lowly expressed genes, at least 10 read counts per row
+#table(keep)
+dds <- dds[keep,]
+# generate RPKM file
+rpkm <- apply(cts,2,function(x) x/sum(x))*10^9/geneLength
+write.csv(rpkm,"RPKM.csv")
+write.csv(rpkm[keep,],"filtered_RPKM.csv")
+# generate CPM file
+cpm <- apply(cts,2,function(x) x/sum(x)*10^6)
+write.csv(cpm,"CPM.csv")
+cpm <- cpm[keep,]
+write.csv(cpm,"filtered_CPM.csv")
+###################
+# PCA and heatmap #
+###################
+library(pheatmap)
+library(ggrepel)
+# heatmap
+rld=vst(dds,blind=F)
+jpeg("heatmap_pre.jpeg",width=7,height=5,units="in",res=300)
+pheatmap(cor(assay(rld)),annotation_col=coldata,show_colnames=F,main="Heatmap of correlation within samples")
+dev.off()
+# PCA
+pcaData=plotPCA(rld,intgroup=c("treatment"),returnData=TRUE)
+percentVar=round(100*attr(pcaData,"percentVar"))
+jpeg("PCA_pre.jpeg",width=9,height=8,units="in",res=300)
+print(ggplot(pcaData,aes(x=PC1,y=PC2,color=treatment))+
+        geom_point(size=3)+
+        ggtitle("Principal component analysis using DESeq2")+
+        #geom_text(aes(label=name,fontface=2),hjust="inward",vjust=-0.8,size=4)+
+        geom_text_repel(aes(label=name,fontface=2),size=4,box.padding=0.5)+
+        xlab(paste0("PC1: ",percentVar[1],"% variance"))+
+        ylab(paste0("PC2: ",percentVar[2],"% variance"))+
+        theme(plot.title=element_text(size=14,family="Helvetica",face="bold",hjust=0.5),
+              text=element_text(size=12,family="Helvetica"),
+              axis.title=element_text(face="bold"),
+              axis.text.x=element_text(size=12,face="bold"),
+              axis.text.y=element_text(size=12,face="bold"),
+              legend.text=element_text(size=12,face="bold"),
+              legend.title=element_text(size=12,face="bold")))
+dev.off()
+# 3D PCA
+library(plotly)
+m<-t(log2(cpm+1))
+pca<-prcomp(m,scale. = T)
+pca_plot<-as.data.frame(pca$x[,1:3])
+pca_plot$lab<-rownames(m)
+pca_plot$reg<-coldata$group
+p<-plot_ly(pca_plot,x=~PC1,y=~PC2,z=~PC3,color=~reg,colors="Set1") %>% add_markers(text = ~lab)
+htmlwidgets::saveWidget(as_widget(p), "control_3dpca_pre.html") # 2nd data
+####################
+# batch correction #
+####################
+#mkdir ruvseq
+#time Rscript RUVr.R merged_gene_name_expression2.txt design_table
+#cpdf heatmap_post_k?_UQ_norm.pdf -o x1.pdf
+#cpdf heatmap_post_k??_UQ_norm.pdf -o x2.pdf
+#cpdf x1.pdf x2.pdf -o combine_heatmap.pdf 
+#cpdf PCA_post_k?_UQ_norm.pdf -o x1.pdf
+#cpdf PCA_post_k??_UQ_norm.pdf -o x2.pdf
+#cpdf x1.pdf x2.pdf -o combine_pca.pdf 
+# rm x*
+# RUVSeq
+library("RUVSeq")
+set <- newSeqExpressionSet(as.matrix(cts[keep,]),phenoData=data.frame(x,row.names=colnames(cts)))
+colors <- brewer.pal(8, "Set2")
+y <- DGEList(counts=counts(set), group=x)
+y <- calcNormFactors(y, method="upperquartile")
+y <- estimateGLMCommonDisp(y, design)
+y <- estimateGLMTagwiseDisp(y, design)
+fit <- glmFit(y, design)
+res <- residuals(fit, type="deviance")
+seqUQ <- betweenLaneNormalization(set, which="upper")
+# check the plot, and select k value
+ruv <- RUVr(seqUQ,rownames(set),k=3,res)
+ddsruv <- DESeqDataSetFromMatrix(countData=normCounts(ruv),colData=coldata,design=design) # normalized data
+ddsruv <- DESeq(ddsruv)
+cpm2 <- apply(counts(ddsruv),2,function(x) x/sum(x)*10^6)
+write.csv(cpm2,"filtered_norm_CPM.csv")
+# heatmap, post batch
+rldruv=vst(ddsruv,blind=F)
+jpeg("heatmap_post.jpeg",width=7,height=5,units="in",res=300)
+pheatmap(cor(assay(rldruv)),annotation_col=coldata,show_colnames=F,main="Heatmap of correlation within samples")
+dev.off()
+# PCA
+pcaData=plotPCA(rldruv,intgroup=c("treatment"),returnData=TRUE)
+percentVar=round(100*attr(pcaData,"percentVar"))
+jpeg("PCA_post.jpeg",width=9,height=8,units="in",res=300)
+print(ggplot(pcaData,aes(x=PC1,y=PC2,color=treatment))+
+        geom_point(size=3)+
+        ggtitle("Principal component analysis using DESeq2")+
+        #geom_text(aes(label=name,fontface=2),hjust="inward",vjust=-0.8,size=4)+
+        geom_text_repel(aes(label=name,fontface=2),size=4,box.padding=0.5)+
+        xlab(paste0("PC1: ",percentVar[1],"% variance"))+
+        ylab(paste0("PC2: ",percentVar[2],"% variance"))+
+        theme(plot.title=element_text(size=14,family="Helvetica",face="bold",hjust=0.5),
+              text=element_text(size=12,family="Helvetica"),
+              axis.title=element_text(face="bold"),
+              axis.text.x=element_text(size=12,face="bold"),
+              axis.text.y=element_text(size=12,face="bold"),
+              legend.text=element_text(size=12,face="bold"),
+              legend.title=element_text(size=12,face="bold")))
+dev.off()
+# 3D PCA
+#library(plotly)
+#cpm2 <- apply(counts(ddsruv),2,function(x) x/sum(x)*10^6)
+m<-t(log2(cpm2+1))
+pca<-prcomp(m,scale. = T)
+pca_plot<-as.data.frame(pca$x[,1:3])
+pca_plot$lab<-rownames(m)
+pca_plot$reg<-coldata$group
+p<-plot_ly(pca_plot,x=~PC1,y=~PC2,z=~PC3,color=~reg,colors="Set1") %>% add_markers(text = ~lab)
+htmlwidgets::saveWidget(as_widget(p), "control_3dpca_post.html") # 2nd data
+# diffexp 
+resultsNames(ddsruv)
+res1 <- results(ddsruv, contrast=list(c("MKF","MKM","MWF","MWM"),c("ESM","EVFN","EVFY","EVM"))) # replace with your compare group
+res2 <- results(ddsruv, contrast=list("EVFY","EVFN")) # replace with your compare group
+res3 <- results(ddsruv, contrast=list("MKF","MKM")) # replace with your compare group
+res4 <- results(ddsruv, contrast=list(c("MKF","MKM"),c("MWF","MWM"))) # replace with your compare group
+res1$padj <- ifelse(is.na(res1$padj), 1, res1$padj)
+res2$padj <- ifelse(is.na(res2$padj), 1, res2$padj)
+res3$padj <- ifelse(is.na(res3$padj), 1, res3$padj)
+res4$padj <- ifelse(is.na(res4$padj), 1, res4$padj)
+res1 <- cbind(as.data.frame(res1),cpm2)
+res1f <- res1[res1$padj<0.05 & abs(res1$log2FoldChange)>1,]
+res2 <- cbind(as.data.frame(res2),cpm2)
+res2f <- res2[res2$padj<0.05 & abs(res2$log2FoldChange)>1,]
+res3 <- cbind(as.data.frame(res3),cpm2)
+res3f <- res3[res3$padj<0.05 & abs(res3$log2FoldChange)>1,]
+res4 <- cbind(as.data.frame(res4),cpm2)
+res4f <- res4[res4$padj<0.05 & abs(res4$log2FoldChange)>1,]
+options(digits=6)
+write.csv(res1,"MEF_vs_End.csv")
+write.csv(res1f,"filtered_MEF_vs_End.csv")
+write.csv(res2,"EVFY_vs_EVFN.csv")
+write.csv(res2f,"filtered_EVFY_vs_EVFN.csv")
+write.csv(res3,"MKF_vs_MKM.csv")
+write.csv(res3f,"filtered_MKF_vs_MKM.csv")
+write.csv(res4,"MEF_KO_vs_WT.csv")
+write.csv(res4f,"filtered_MEF_KO_vs_WT.csv")
+# volcano plot
+library(dplyr)
+category1=ifelse(res1$padj>0.05|abs(res1$log2FoldChange)<1,"Regularly expressed",ifelse(res1$log2FoldChange>1,"Highly expressed in MEF","Highly expressed in End"))
+index=as.factor(category1)
+if(length(levels(index))==3) { index=factor(category1,levels=c("Regularly expressed","Highly expressed in MEF","Highly expressed in End"),ordered=T) }
+plot=data.frame(logFC=res1$log2FoldChange,log10p=-log10(res1$padj),index=index)
+jpeg("volcano_plot_MEF_vs_End.jpeg",width=10,height=8,units="in",res=300)
+print(ggplot(plot %>% arrange(index),aes(x=logFC,y=log10p,col=index))+
+        geom_point(aes(size=index))+
+        ggtitle("Volcano plot of MEF vs End")+
+        theme_bw()+theme_classic()+
+        scale_colour_manual(values=c("#999999","#E69F00","#56B4E9"))+
+        scale_size_manual(values=c(1,2,2))+
+        scale_y_continuous(name=expression(bold(-log[10]("Adjusted p-value"))))+
+        geom_vline(xintercept=1,colour="black",linetype=2)+
+        geom_vline(xintercept=-1,colour="black",linetype=2)+
+        geom_hline(yintercept=-log10(0.05),colour="black",linetype=2)+
+        theme(plot.title=element_text(size=14,family="Helvetica",face="bold",hjust=0.5),
+              text=element_text(size=12,family="Helvetica"),
+              axis.title=element_text(face="bold"),
+              axis.text.x=element_text(size=10,face="bold"),
+              axis.text.y=element_text(size=10,face="bold"),
+              legend.text=element_text(size=10,face="bold"),
+              legend.title=element_text(size=10,face="bold")))
+dev.off()
+category1=ifelse(res2$padj>0.05|abs(res2$log2FoldChange)<1,"Regularly expressed",ifelse(res2$log2FoldChange>1,"Highly expressed in EVFY","Highly expressed in EVFN"))
+index=as.factor(category1)
+if(length(levels(index))==3) { index=factor(category1,levels=c("Regularly expressed","Highly expressed in EVFY","Highly expressed in EVFN"),ordered=T) }
+plot=data.frame(logFC=res2$log2FoldChange,log10p=-log10(res2$padj),index=index)
+jpeg("volcano_plot_EVFY_vs_EVFN.jpeg",width=10,height=8,units="in",res=300)
+print(ggplot(plot %>% arrange(index),aes(x=logFC,y=log10p,col=index))+
+        geom_point(aes(size=index))+
+        ggtitle("Volcano plot of EVFY vs EVFN")+
+        theme_bw()+theme_classic()+
+        scale_colour_manual(values=c("#999999","#E69F00","#56B4E9"))+
+        scale_size_manual(values=c(1,2,2))+
+        scale_y_continuous(name=expression(bold(-log[10]("Adjusted p-value"))))+
+        geom_vline(xintercept=1,colour="black",linetype=2)+
+        geom_vline(xintercept=-1,colour="black",linetype=2)+
+        geom_hline(yintercept=-log10(0.05),colour="black",linetype=2)+
+        theme(plot.title=element_text(size=14,family="Helvetica",face="bold",hjust=0.5),
+              text=element_text(size=12,family="Helvetica"),
+              axis.title=element_text(face="bold"),
+              axis.text.x=element_text(size=10,face="bold"),
+              axis.text.y=element_text(size=10,face="bold"),
+              legend.text=element_text(size=10,face="bold"),
+              legend.title=element_text(size=10,face="bold")))
+dev.off()
+category1=ifelse(res3$padj>0.05|abs(res3$log2FoldChange)<1,"Regularly expressed",ifelse(res3$log2FoldChange>1,"Highly expressed in MKF","Highly expressed in MKM"))
+index=as.factor(category1)
+if(length(levels(index))==3) { index=factor(category1,levels=c("Regularly expressed","Highly expressed in MKF","Highly expressed in MKM"),ordered=T) }
+plot=data.frame(logFC=res3$log2FoldChange,log10p=-log10(res3$padj),index=index)
+jpeg("volcano_plot_MKF_vs_MKM.jpeg",width=10,height=8,units="in",res=300)
+print(ggplot(plot %>% arrange(index),aes(x=logFC,y=log10p,col=index))+
+        geom_point(aes(size=index))+
+        ggtitle("Volcano plot of MKF vs MKM")+
+        theme_bw()+theme_classic()+
+        scale_colour_manual(values=c("#999999","#E69F00","#56B4E9"))+
+        scale_size_manual(values=c(1,2,2))+
+        scale_y_continuous(name=expression(bold(-log[10]("Adjusted p-value"))))+
+        geom_vline(xintercept=1,colour="black",linetype=2)+
+        geom_vline(xintercept=-1,colour="black",linetype=2)+
+        geom_hline(yintercept=-log10(0.05),colour="black",linetype=2)+
+        theme(plot.title=element_text(size=14,family="Helvetica",face="bold",hjust=0.5),
+              text=element_text(size=12,family="Helvetica"),
+              axis.title=element_text(face="bold"),
+              axis.text.x=element_text(size=10,face="bold"),
+              axis.text.y=element_text(size=10,face="bold"),
+              legend.text=element_text(size=10,face="bold"),
+              legend.title=element_text(size=10,face="bold")))
+dev.off()
+category1=ifelse(res4$padj>0.05|abs(res4$log2FoldChange)<1,"Regularly expressed",ifelse(res4$log2FoldChange>1,"Highly expressed in MEF KO","Highly expressed in MEF WT"))
+index=as.factor(category1)
+if(length(levels(index))==3) { index=factor(category1,levels=c("Regularly expressed","Highly expressed in MEF KO","Highly expressed in MEF WT"),ordered=T) }
+plot=data.frame(logFC=res4$log2FoldChange,log10p=-log10(res4$padj),index=index)
+jpeg("volcano_plot_MEF_KO_vs_WT.jpeg",width=10,height=8,units="in",res=300)
+print(ggplot(plot %>% arrange(index),aes(x=logFC,y=log10p,col=index))+
+        geom_point(aes(size=index))+
+        ggtitle("Volcano plot of MEF KO vs MEF WT")+
+        theme_bw()+theme_classic()+
+        scale_colour_manual(values=c("#999999","#E69F00","#56B4E9"))+
+        scale_size_manual(values=c(1,2,2))+
+        scale_y_continuous(name=expression(bold(-log[10]("Adjusted p-value"))))+
+        geom_vline(xintercept=1,colour="black",linetype=2)+
+        geom_vline(xintercept=-1,colour="black",linetype=2)+
+        geom_hline(yintercept=-log10(0.05),colour="black",linetype=2)+
+        theme(plot.title=element_text(size=14,family="Helvetica",face="bold",hjust=0.5),
+              text=element_text(size=12,family="Helvetica"),
+              axis.title=element_text(face="bold"),
+              axis.text.x=element_text(size=10,face="bold"),
+              axis.text.y=element_text(size=10,face="bold"),
+              legend.text=element_text(size=10,face="bold"),
+              legend.title=element_text(size=10,face="bold")))
+dev.off()
+####################################
