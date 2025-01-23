@@ -27,4 +27,5 @@ conda create -n pact_env fastqc trimmomatic bwa samtools gatk4 bedtools bcftools
 
 ## Run ctDNA_run.sh
 chmod +x run_pact.sh
+
 ./ctDNA_run.sh sample_R1.fastq.gz sample_R2.fastq.gz reference.fasta output_dir/
