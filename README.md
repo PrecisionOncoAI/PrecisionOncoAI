@@ -11,7 +11,7 @@
   this AI-driven platform simplifies complex bioinformatics processes and translates them into actionable insights for cancer care.
 
 Instruction of setting for ctDNA analysis
-### A. Set Up the Environment
+## A. Set Up the Environment
 sudo apt update && sudo apt install -y \
     fastqc \
     trimmomatic \
@@ -22,10 +22,15 @@ sudo apt update && sudo apt install -y \
     bcftools \
     python3 \
     python3-pip
-## If specific versions are required, we can use Conda: 
+### If specific versions are required, we can use Conda: 
 conda create -n pact_env fastqc trimmomatic bwa samtools gatk4 bedtools bcftools -c bioconda
 
-## Run ctDNA_run.sh
+### Run ctDNA_run.sh
 chmod +x run_pact.sh
 
 ./ctDNA_run.sh sample_R1.fastq.gz sample_R2.fastq.gz reference.fasta output_dir/
+
+### log & error handle
+exec > >(tee -i ${OUTPUT_DIR}/pact.log)
+
+exec 2>&1
