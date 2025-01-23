@@ -6,10 +6,21 @@
   including circulating tumor DNA (ctDNA),
   cancer prediction,
   single-cell RNA sequencing (scRNA-seq),
+  RNA-seq,
   and spatial transcriptomics,
   this AI-driven platform simplifies complex bioinformatics processes and translates them into actionable insights for cancer care.
 
-<!---
-PrecisionOncoAI/PrecisionOncoAI is a ✨ special ✨ repository because its `README.md` (this file) appears on your GitHub profile.
-You can click the Preview link to take a look at your changes.
---->
+Instruction of setting for ctDNA analysis
+### A. Set Up the Environment
+sudo apt update && sudo apt install -y \
+    fastqc \
+    trimmomatic \
+    bwa \
+    samtools \
+    gatk \
+    bedtools \
+    bcftools \
+    python3 \
+    python3-pip
+## If specific versions are required, we can use Conda: 
+conda create -n pact_env fastqc trimmomatic bwa samtools gatk4 bedtools bcftools -c bioconda
